@@ -1,0 +1,156 @@
+#!/bin/bash
+
+TEMPLATE_FILE="$HOME/.paglu_templates.json"
+BRAVE_PROFILE="$HOME/.paglu_profile"
+BRAVE_CMD="brave-browser --remote-debugging-port=9222 --user-data-dir=$BRAVE_PROFILE --profile-directory=Default"
+
+if [ ! -f "$TEMPLATE_FILE" ]; then
+    echo "{}" >"$TEMPLATE_FILE"
+fi
+
+start_brave_debug() {
+    echo "Opening Brave in debug mode..."
+    $BRAVE_CMD >/dev/null 2>&1 &
+    BRAVE_PARENT_PID=$!
+
+    # Wait for Brave to fully launch
+    sleep 5
+
+    # Get all child PIDs (including itself)
+    BRAVE_PIDS=$(pgrep -P $BRAVE_PARENT_PID)
+    BRAVE_PIDS="$BRAVE_PIDS $BRAVE_PARENT_PID"
+}
+
+list_tabs() {
+    curl -s http://localhost:9222/json/list | jq -r '.[] | select(.type == "page") | .url' | grep -E "^(http|https)://"
+}
+
+save_template() {
+    local name="$1"
+    local urls="$2"
+    jq --arg name "$name" --argjson urls "$urls" '. + {($name): $urls}' "$TEMPLATE_FILE" >tmp.json && mv tmp.json "$TEMPLATE_FILE"
+}
+
+if [ "$1" == "create" ]; then
+    start_brave_debug
+
+    echo "Open your tabs and press Enter when done..."
+    read -r
+
+    urls=$(list_tabs | jq -R -s -c 'split("\n")[:-1]')
+
+    # Kill all Brave processes started by this script
+    #echo "Closing Brave debug session..."
+    kill -9 $BRAVE_PIDS >/dev/null 2>&1 || true
+    sleep 1
+    rm -rf "$BRAVE_PROFILE"
+    #echo "Session data cleared."
+
+    while true; do
+        echo "Enter a name for this template:"
+        read -r template_name
+        if jq -e --arg name "$template_name" '.[$name]' "$TEMPLATE_FILE" >/dev/null; then
+            echo "Template '$template_name' already exists! Choose an option:"
+            echo "[1] Overwrite it"
+            echo "[2] Append new URLs"
+            echo "[3] Choose a different name"
+            read -r choice
+
+            case "$choice" in
+            1)
+                save_template "$template_name" "$urls"
+                echo "Template '$template_name' overwritten!"
+                break
+                ;;
+            2)
+                existing_urls=$(jq -r --arg name "$template_name" '.[$name][]' "$TEMPLATE_FILE" 2>/dev/null)
+                merged_urls=$(jq -s 'add | unique' <(echo "$existing_urls") <(echo "$urls"))
+                save_template "$template_name" "$merged_urls"
+                echo "New URLs appended to '$template_name'."
+                break
+                ;;
+            3) continue ;;
+            *) echo "Invalid choice. Try again." ;;
+            esac
+        else
+            save_template "$template_name" "$urls"
+            echo "Template '$template_name' saved!"
+            break
+        fi
+    done
+
+elif [ "$1" == "edit" ]; then
+    template_name="$2"
+    if [ -z "$template_name" ]; then
+        echo "Usage: paglu edit <template_name>"
+        exit 1
+    fi
+
+    existing_urls=$(jq -r --arg name "$template_name" '.[$name][]' "$TEMPLATE_FILE" 2>/dev/null)
+    if [ -z "$existing_urls" ]; then
+        echo "Template not found!"
+        exit 1
+    fi
+
+    echo "Existing URLs in '$template_name':"
+    echo "$existing_urls" | nl -w2 -s'. '
+
+    echo "Options:"
+    echo "[1] Remove a URL"
+    echo "[2] Add new URLs"
+    read -r edit_choice
+
+    case "$edit_choice" in
+    1)
+        echo "Enter the number of the URL to remove:"
+        read -r remove_index
+        new_urls=$(echo "$existing_urls" | sed "${remove_index}d" | jq -R -s -c 'split("\n")[:-1]')
+        save_template "$template_name" "$new_urls"
+        echo "Updated template '$template_name'."
+        ;;
+    2)
+        start_brave_debug
+        echo "Open the new tabs you want to add, then press Enter..."
+        read -r
+        new_urls=$(list_tabs | jq -R -s -c 'split("\n")[:-1]')
+        merged_urls=$(jq -s 'add | unique' <(echo "$existing_urls") <(echo "$new_urls"))
+        save_template "$template_name" "$merged_urls"
+        echo "Updated template '$template_name'."
+        kill -9 $BRAVE_PIDS >/dev/null 2>&1
+        rm -rf "$BRAVE_PROFILE"
+        echo "Brave debug session closed."
+        ;;
+    *)
+        echo "Invalid choice."
+        exit 1
+        ;;
+    esac
+
+elif [ "$1" == "open" ]; then
+    template_name="$2"
+    if [ -z "$template_name" ]; then
+        echo "Usage: paglu open <template_name>"
+        exit 1
+    fi
+
+    urls=$(jq -r --arg name "$template_name" '.[$name][]' "$TEMPLATE_FILE" 2>/dev/null)
+    if [ -z "$urls" ]; then
+        echo "Template not found!"
+        exit 1
+    fi
+
+    echo "Opening '$template_name'..."
+    first_tab=true
+    while read -r url; do
+        if [ "$first_tab" == "true" ]; then
+            brave-browser --new-window "$url" >/dev/null 2>&1 &
+            first_tab=false
+            sleep 1
+        else
+            brave-browser --new-tab "$url" >/dev/null 2>&1 &
+        fi
+    done <<<"$urls"
+else
+    echo "Usage: paglu [create|open <template_name>|edit <template_name>]"
+    exit 1
+fi
