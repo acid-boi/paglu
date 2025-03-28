@@ -150,6 +150,26 @@ elif [ "$1" == "open" ]; then
             brave-browser --new-tab "$url" >/dev/null 2>&1 &
         fi
     done <<<"$urls"
+elif [ "$1" == "paglu" ]; then
+    if [ ! -s "$TEMPLATE_FILE" ] || [ "$(jq length "$TEMPLATE_FILE")" -eq 0 ]; then
+        echo "No templates found!"
+        exit 1
+    fi
+
+    echo "Available templates:"
+    jq -r 'keys[]' "$TEMPLATE_FILE" | nl -w2 -s'. '
+
+    echo "Enter the template number to view URLs:"
+    read -r template_number
+
+    selected_template=$(jq -r 'keys[]' "$TEMPLATE_FILE" | sed -n "${template_number}p")
+    if [ -z "$selected_template" ]; then
+        echo "Invalid selection!"
+        exit 1
+    fi
+
+    echo "URLs in '$selected_template':"
+    jq -r --arg name "$selected_template" '.[$name][]' "$TEMPLATE_FILE"
 else
     echo "Usage: paglu [create|open <template_name>|edit <template_name>]"
     exit 1
