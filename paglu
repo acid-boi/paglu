@@ -143,6 +143,7 @@ elif [ "$1" == "open" ]; then
     first_tab=true
     while read -r url; do
         if [ "$first_tab" == "true" ]; then
+            brave-browser --new-window >/dev/null &
             brave-browser --new-window "$url" >/dev/null 2>&1 &
             first_tab=false
             sleep 1
