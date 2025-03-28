@@ -109,16 +109,24 @@ elif [ "$1" == "edit" ]; then
         echo "Updated template '$template_name'."
         ;;
     2)
-        start_brave_debug
-        echo "Open the new tabs you want to add, then press Enter..."
-        read -r
-        new_urls=$(list_tabs | jq -R -s -c 'split("\n")[:-1]')
-        merged_urls=$(jq -s 'add | unique' <(echo "$existing_urls") <(echo "$new_urls"))
+        echo "Enter new URLs (one per line). Type 'done' when finished:"
+        new_urls=()
+        while IFS= read -r url; do
+            [ "$url" == "done" ] && break
+            new_urls+=("$url")
+        done
+
+        # Convert array to JSON array format
+        new_urls_json=$(printf '%s\n' "${new_urls[@]}" | jq -R . | jq -s .)
+
+        # Merge with existing URLs
+        merged_urls=$(jq -s 'add | unique' \
+            <(echo "$existing_urls" | jq -R -s -c 'split("\n")[:-1]') \
+            <(echo "$new_urls_json"))
+
+        # Save the updated template
         save_template "$template_name" "$merged_urls"
-        echo "Updated template '$template_name'."
-        kill -9 $BRAVE_PIDS >/dev/null 2>&1
-        rm -rf "$BRAVE_PROFILE"
-        echo "Brave debug session closed."
+        echo "New URLs added to '$template_name'."
         ;;
     *)
         echo "Invalid choice."
@@ -144,7 +152,7 @@ elif [ "$1" == "open" ]; then
     while read -r url; do
         if [ "$first_tab" == "true" ]; then
             pid=$(pidof brave)
-            if [ -z $pid ]; then
+            if [ -z "$pid" ] || [ "$pid" == "null" ]; then
                 brave-browser --new-window >/dev/null 2>&1 &
                 sleep 1
             fi
